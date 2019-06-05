@@ -2,6 +2,7 @@ defmodule Vecto do
   defmacro __using__(opts \\ []) do
     quote location: :keep do
       use Vecto.Schema
+      use Vecto.Query
 
       unquote(
         # by default, using this module will implement
@@ -14,12 +15,6 @@ defmodule Vecto do
           end
         end
       )
-    end
-  end
-
-  defmacro __before_compile__(_env) do
-    quote do
-      use Vecto.Query, table: @model_table
     end
   end
 end
