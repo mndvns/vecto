@@ -25,7 +25,7 @@ defmodule Vecto.MixProject do
       {:ecto, "~> 2.2"},
       {:poison, "~> 3.1.0"},
       {:postgrex, ">= 0.0.0"},
-      {:request_cache, path: "../request_cache"},
+      {:request_cache, github: "mndvns/request_cache"},
     ]
   end
 end
