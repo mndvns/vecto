@@ -9,66 +9,37 @@ defmodule Vecto.Query do
       alias __MODULE__, as: M
       alias Vecto.Repo, as: R
       import Ecto.Query, only: [from: 2]
+      import Vecto.Query
 
-      has? = &Enum.member?(unquote(funcs), &1)
       over = &defoverridable(Enum.map(&2, fn arity -> {&1, arity} end))
+      has? = &Enum.member?(unquote(funcs), &1)
       over? = &Module.overridable?(M, {&1, &2})
       undef? = &(not(Module.defines?(M, {&1, &2}))) or over?.(&1, &2)
       undefs? = &Enum.all?(Enum.map(&2, fn arity -> undef?.(&1, arity) end))
 
       if has?.(:one) do
-        if undefs?.(:one, [0, 1]) do
-          def one(query \\ %{}), do: __one__(:one, query)
-          over.(:one, [0, 1])
-        end
-        if undefs?.(:one!, [0, 1]) do
-          def one!(query \\ %{}), do: __one__(:one!, query)
-          over.(:one!, [0, 1])
-        end
+        undefs?.(:one, 0..1) && def one(query \\ %{}), do: __one__(:one, query)
+        undefs?.(:one!, 0..1) && def one!(query \\ %{}), do: __one__(:one!, query)
       end
 
       if has?.(:all) do
-        if undefs?.(:all, [0, 1, 2]) do
-          def all(query \\ %{}, limit \\ nil), do: __all__(:all, query, limit)
-          over.(:all, [0, 1, 2])
-        end
-        if undefs?.(:all!, [0, 1, 2]) do
-          def all!(query \\ %{}, limit \\ nil), do: __all__(:all!, query, limit)
-          over.(:all!, [0, 1, 2])
-        end
+        undefs?.(:all, 0..2) && def all(query \\ %{}, limit \\ nil), do: __all__(:all, query, limit)
+        undefs?.(:all!, 0..2) && def all!(query \\ %{}, limit \\ nil), do: __all__(:all!, query, limit)
       end
 
       if has?.(:get) do
-        if undefs?.(:get, [0, 1, 2]) do
-          def get(query \\ %{}, limit \\ 1), do: __get__(false, query, limit)
-          over.(:get, [0, 1, 2])
-        end
-        if undefs?.(:get!, [0, 1, 2]) do
-          def get!(query \\ %{}, limit \\ 1), do: __get__(true, query, limit)
-          over.(:get!, [0, 1, 2])
-        end
+        undefs?.(:get, 0..2) && def get(query \\ %{}, limit \\ 1), do: __get__(false, query, limit)
+        undefs?.(:get!, 0..2) && def get!(query \\ %{}, limit \\ 1), do: __get__(true, query, limit)
       end
 
       if has?.(:update) do
-        if undefs?.(:update, [2, 3]) do
-          def update(struct, changeset, new \\ nil), do: __update__(:update, changeset, new)
-          over.(:update, [2, 3])
-        end
-        if undefs?.(:update!, [2, 3]) do
-          def update!(struct, changeset, new \\ nil), do: __update__(:update!, changeset, new)
-          over.(:update!, [2, 3])
-        end
+        undefs?.(:update, 2..3) && def update(struct, changeset, new \\ nil), do: __update__(:update, changeset, new)
+        undefs?.(:update!, 2..3) && def update!(struct, changeset, new \\ nil), do: __update__(:update!, changeset, new)
       end
 
       if has?.(:insert) do
-        if undef?.(:insert, 1) do
-          def insert(changeset), do: __insert__(:insert, changeset)
-          over.(:insert, [1])
-        end
-        if undef?.(:insert, 1) do
-          def insert!(changeset), do: __insert__(:insert!, changeset)
-          over.(:insert!, [1])
-        end
+        undef?.(:insert, 1) && def insert(changeset), do: __insert__(:insert, changeset)
+        undef?.(:insert, 1) && def insert!(changeset), do: __insert__(:insert!, changeset)
       end
 
       if has?.(:one) or has?.(:get) do
@@ -111,12 +82,14 @@ defmodule Vecto.Query do
       end
 
       if has?.(:update) do
-        def __update__(func, %{__struct__: Ecto.Changeset} = changeset) do
+        def __update__(func, query, new \\ nil)
+
+        def __update__(func, %{__struct__: Ecto.Changeset} = changeset, _new) do
           RequestCache.clear()
           apply(R, func, [changeset])
         end
 
-        def __update__(func, %{__struct__: M} = struct, new \\ nil) do
+        def __update__(func, %{__struct__: M} = struct, new) do
           [struct, map] = cond do
             is_nil(new)           -> [__one__(true, struct.id), Map.from_struct(struct)]
             is_struct(new)        -> [struct, Map.from_struct(new)]
@@ -126,14 +99,25 @@ defmodule Vecto.Query do
 
           __update__(func, changeset(struct, map))
         end
+
+        def __update__(func, query, new) do
+          __update__(func, changeset(%{}, query), new)
+        end
       end
 
+
       if has?.(:changeset) and undef?.(:changeset, 2) do
-        def changeset(%{__struct__: M} = struct, params) do
+        def changeset(struct, params \\ nil)
+        def changeset(%{__struct__: __MODULE__} = struct, params) do
           struct
-          |> Ecto.Changeset.cast(params, M.__editable__())
-          |> Ecto.Changeset.validate_required(params, M.__required__())
+          |> Ecto.Changeset.cast(params, __editable__())
+          |> Ecto.Changeset.validate_required(__required__())
         end
+
+        def changeset(query, params) do
+          changeset(one(query), params)
+        end
+
         over.(:changeset, [2])
       end
 

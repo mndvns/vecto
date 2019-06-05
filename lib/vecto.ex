@@ -1,8 +1,9 @@
 defmodule Vecto do
   defmacro __using__(opts \\ []) do
+    {query_opts, opts} = Keyword.split(opts, [:only])
     quote location: :keep do
       use Vecto.Schema
-      use Vecto.Query
+      use Vecto.Query, unquote(query_opts)
 
       unquote(
         # by default, using this module will implement

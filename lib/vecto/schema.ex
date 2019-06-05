@@ -80,14 +80,14 @@ defmodule Vecto.Schema do
         list1 = get_attr.(:"#{key}_keys") || []
         list2 = get_attr.(:"model_#{key}") || []
         merged = Enum.uniq(list1 ++ list2) |> Enum.sort()
-        put_attr.(:"model_#{key}", merged)
+        put_attr.(:"#{key}_keys", merged)
         quote(do: def(unquote(:"__#{key}__")(), do: unquote(merged)))
       end,
 
       # define aggregated reflecting function `__field__(name)`.
       for {name, type} <- get_attr.(:ecto_fields) do
         flags = for key <- @keys -- [:default] do
-          attrs = get_attr.(:"model_#{key}")
+          attrs = get_attr.(:"#{key}_keys")
           member? = Enum.member?(attrs, name)
           {key, member?}
         end
