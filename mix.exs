@@ -22,7 +22,7 @@ defmodule Vecto.MixProject do
   defp deps do
     [
       {:delegate_access, "~> 0.1.0"},
-      {:ecto, "~> 2.2"},
+      {:ecto_sql, "~> 3.1"},
       {:poison, "~> 3.1.0"},
       {:postgrex, ">= 0.0.0"},
       {:request_cache, github: "mndvns/request_cache", tag: "0.1.2"},
