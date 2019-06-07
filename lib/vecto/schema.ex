@@ -23,6 +23,7 @@ defmodule Vecto.Schema do
       @schema_prefix nil
       @field_source_mapper & &1
       @ecto_autogenerate_id nil
+      @displayed_keys [:id]
 
       import Ecto.Schema, only: [embedded_schema: 1]
       import unquote(__MODULE__), only: [schema: 2]
@@ -32,6 +33,8 @@ defmodule Vecto.Schema do
   end
 
   defmacro schema(name, do: {:__block__, _env, blocks}) do
+    blocks = [{:field, [], [:href, :string, [virtual: true]]} | blocks]
+
     conf = Enum.reduce(@keys, %{blocks: []}, &Map.put(&2, &1, []))
 
     conf =
@@ -84,7 +87,7 @@ defmodule Vecto.Schema do
         quote(do: def(unquote(:"__#{key}__")(), do: unquote(merged)))
       end,
 
-      # define aggregated reflecting function `__field__(name)`.
+      # define aggregated reflecting function, `__field__(name)`.
       for {name, type} <- get_attr.(:ecto_fields) do
         flags = for key <- @keys -- [:default] do
           attrs = get_attr.(:"#{key}_keys")

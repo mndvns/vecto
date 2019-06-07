@@ -9,22 +9,57 @@ Vecto is a utility wrapper for ecto models.
 * implements `Enumerable` and `Poison.Encode` protocols as well as the `Access` behaviour
 * all of the above are opt-in
 
-## Usage
+## Schema
 
 The schema interface mirrors `Ecto.Schema` without collisions.
 
 ```
-defmodule MyModel do
+defmodule User do
   use Vecto
 
-  schema "my_table" do
-    field :id
-    field :name
+  schema "users" do
+    field :name, :string
   end
 end
 ```
 
-`TODO: add examples`
+You can make fields required inline or make them uneditable (they
+default to editable). Ecto's built-in field options like `virtual` and `default`
+have not changed..
+
+```
+defmodule User do
+  use Vecto
+
+  schema "users" do
+    field :name, :string, required: true
+    field :password, :string, editable: false
+    field :href, :string, virtual: true
+  end
+end
+```
+
+When encoding with `Poison`, Vecto removes any fields that have `displayed` set to false.
+
+```
+defmodule User do
+  use Vecto
+
+  schema "users" do
+    field :name, :string, required: true
+    field :password, :string, editable: false
+    field :href, :string, virtual: true, displayed: false
+  end
+end
+```
+
+Now, when a `%User{}` is JSON encoded, the `href` key is not included.
+
+## Querying *`TODO`*
+
+## Casting and validation *`TODO`*
+
+## Reflecting *`TODO`*
 
 ## Installation
 

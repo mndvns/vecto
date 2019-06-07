@@ -7,11 +7,18 @@ defmodule Vecto.Poison do
     quote do
       defimpl Poison.Encoder do
         def encode(value, opts) do
-          mod = unquote(__CALLER__.module)
+          module = unquote(__CALLER__.module)
+          displayed = module.__displayed__()
 
           value
-          |> Map.drop([:__meta__, :__struct__])
-          |> Map.take(mod.__displayed__())
+          |> Map.from_struct()
+          |> Stream.filter(fn
+            {k, _v} when is_binary(k) -> true
+            {:href, nil} -> false
+            {k, _v} -> Enum.member?(displayed, k)
+            _ -> false
+          end)
+          |> Enum.into(%{})
           |> Poison.Encoder.Map.encode(opts)
         end
       end

@@ -1,133 +1,197 @@
 defmodule Vecto.Query do
-  @default_funcs [:one, :all, :get, :update, :insert, :changeset]
+  require Ecto.Query
+
+  def one(module, where \\ %{}), do: find(:one, false, module, where, 1)
+  def one!(module, where \\ %{}), do: find(:one, true, module, where, 1)
+
+  def all(module, where \\ %{}, limit \\ nil), do: find(:all, false, module, where, limit)
+  def all!(module, where \\ %{}, limit \\ nil), do: find(:all, true, module, where, limit)
+
+  def get(module, where \\ %{}, limit \\ 1), do: find(:get, false, module, where, limit)
+  def get!(module, where \\ %{}, limit \\ 1), do: find(:get, true, module, where, limit)
+
+  def update(module, where \\ %{}, params \\ nil), do: change(:update, module, where, params)
+  def update!(module, where \\ %{}, params \\ nil), do: change(:update!, module, where, params)
+
+  def upsert(module, where \\ %{}, params \\ nil), do: change_or_create(false, module, where, params)
+  def upsert!(module, where \\ %{}, params \\ nil), do: change_or_create(true, module, where, params)
+
+  def insert(module, params \\ %{}), do: create(:insert, module, params)
+  def insert!(module, params \\ %{}), do: create(:insert!, module, params)
+
+  def delete(module, struct), do: remove(:delete, module, struct)
+  def delete!(module, struct), do: remove(:delete!, module, struct)
+
+  def changeset(module, %{__struct__: module} = struct, params) do
+    params = params |> sanitize(module) |> Enum.into(%{})
+    struct
+    |> Ecto.Changeset.cast(params, module.__editable__())
+    |> Ecto.Changeset.validate_required(module.__required__())
+  end
+  def changeset(module, where, params) do
+    changeset(module, one!(module, where), params)
+  end
+
+  defp change(func, module, %Ecto.Changeset{} = changeset, _new) do
+    result = apply(Vecto.Repo, func, [changeset])
+    case result do
+      %{__struct__: ^module} -> store_update_struct(result)
+      {:ok, result} -> store_update_struct(result)
+      {:error, _} -> nil
+    end
+    result
+  end
+  defp change(func, module, %{__struct__: module, id: id} = struct, nil) do
+    change(func, module, one!(module, id), Map.from_struct(struct))
+  end
+  defp change(func, module, %{__struct__: module} = struct, new) do
+    change(func, module, changeset(module, struct, new), new)
+  end
+  defp change(func, module, where, new) do
+    change(func, module, one!(module, where), new)
+  end
+
+  defp change_or_create(bang, module, where, params) do
+    where = sanitize(where, module)
+    |> Enum.into(%{})
+    |> case do
+        %{id: id} -> %{id: id}
+        other -> other
+      end
+
+    case one(module, where) do
+      %{__struct__: ^module} = struct->
+        func = if bang, do: :update!, else: :update
+        change(func, module, struct, params)
+      _other ->
+        func = if bang, do: :insert!, else: :insert
+        merged = Keyword.merge(sanitize(where, module), sanitize(params, module))
+        create(func, module, merged)
+    end
+  end
+
+  defp create(func, module, %Ecto.Changeset{data: %{__struct__: module}} = changeset) do
+    result = apply(Vecto.Repo, func, [changeset])
+    case result do
+      %{__struct__: ^module} -> store_put_struct(result)
+      {:ok, result} -> store_put_struct(result)
+      {:error, _} -> nil
+    end
+    result
+  end
+  defp create(func, module, new) do
+    create(func, module, changeset(module, Kernel.struct(module), new))
+  end
+
+  defp find(:get, bang, module, where, nil), do: find(:one, bang, module, where, 1)
+  defp find(:get, bang, module, where, limit), do: find(:all, bang, module, where, limit)
+  defp find(func, bang, module, where, limit) do
+    where = sanitize(where, module)
+    stored_map = Enum.into(where, %{}) # for easy deletion and updating later
+    func = if bang, do: :"#{func}!", else: func
+    RequestCache.get_or_store({module, func, stored_map, limit}, fn ->
+      query = Ecto.Query.from(u in module, where: ^where)
+      query = if is_nil(limit), do: query, else: Ecto.Query.limit(query, ^limit)
+      result = apply(Vecto.Repo, func, [query])
+      # store each record if we returned a list
+      if is_list(result), do: Enum.map(result, &store_update_struct/1)
+      result
+    end)
+  end
+
+  defp remove(func, module, %{__struct__: module} = struct) do
+    result = apply(Vecto.Repo, func, [struct])
+    case result do
+      {:ok, _} -> store_delete_struct(struct)
+      {:error, _} -> nil
+    end
+    result
+  end
+  defp remove(func, module, where) do
+    remove(func, module, one!(module, where))
+  end
+
+  defp store_put_struct(%{__struct__: module, id: id} = struct) do
+    RequestCache.put({module, :one, %{id: id}, 1}, struct)
+  end
+
+  defp store_update_struct(%{__struct__: _, id: id} = struct) do
+    RequestCache.all()
+    |> Enum.filter(fn {_key, value} -> is_map(value) and Map.get(value, :id) == id end)
+    |> Enum.each(fn {key, _} -> RequestCache.put(key, struct) end)
+    store_put_struct(struct)
+  end
+
+  defp store_delete_struct(%{__struct__: _, id: id}) do
+    RequestCache.all()
+    |> Enum.filter(fn {_key, value} -> is_map(value) and Map.get(value, :id) == id end)
+    |> Enum.each(fn {key, _} -> RequestCache.delete(key) end)
+  end
+
+  defp sanitize(id, module) when is_binary(id) do
+    [id: id] |> sanitize(module)
+  end
+  defp sanitize(%{__struct__: module} = struct, module) do
+    struct |> Map.from_struct() |> sanitize(module)
+  end
+  defp sanitize(enum, module) do
+    reject_keys = [:__meta__ | module.__virtual__()]
+    Enum.reject(enum, fn {key, value} -> is_nil(value) or key in reject_keys end)
+  end
+
+  @default_definitions [:one, :all, :get, :update, :upsert, :insert, :delete, :changeset]
 
   defmacro __using__(opts) do
-    except = Keyword.get(opts, :except, [])
-    funcs = Keyword.get(opts, :only, @default_funcs) -- except
+    define_except = Keyword.get(opts, :define_except, [])
+    define_only = Keyword.get(opts, :define_only, @default_definitions)
+    definitions = define_only -- define_except
 
     quote location: :keep do
       alias __MODULE__, as: M
       alias Vecto.Repo, as: R
-      import Ecto.Query, only: [from: 2]
-      import Vecto.Query
+      alias Vecto.Query, as: Q
 
-      over = &defoverridable(Enum.map(&2, fn arity -> {&1, arity} end))
-      has? = &Enum.member?(unquote(funcs), &1)
-      over? = &Module.overridable?(M, {&1, &2})
-      undef? = &(not(Module.defines?(M, {&1, &2}))) or over?.(&1, &2)
-      undefs? = &Enum.all?(Enum.map(&2, fn arity -> undef?.(&1, arity) end))
+      should_define? = &Enum.member?(unquote(definitions), &1)
 
-      if has?.(:one) do
-        undefs?.(:one, 0..1) && def one(query \\ %{}), do: __one__(:one, query)
-        undefs?.(:one!, 0..1) && def one!(query \\ %{}), do: __one__(:one!, query)
+      if should_define?.(:one) do
+        def one(query \\ %{}), do: Q.one(M, query)
+        def one!(query \\ %{}), do: Q.one!(M, query)
       end
 
-      if has?.(:all) do
-        undefs?.(:all, 0..2) && def all(query \\ %{}, limit \\ nil), do: __all__(:all, query, limit)
-        undefs?.(:all!, 0..2) && def all!(query \\ %{}, limit \\ nil), do: __all__(:all!, query, limit)
+      if should_define?.(:all) do
+        def all(query \\ %{}, limit \\ nil), do: Q.all(M, query, limit)
+        def all!(query \\ %{}, limit \\ nil), do: Q.all!(M, query, limit)
       end
 
-      if has?.(:get) do
-        undefs?.(:get, 0..2) && def get(query \\ %{}, limit \\ 1), do: __get__(false, query, limit)
-        undefs?.(:get!, 0..2) && def get!(query \\ %{}, limit \\ 1), do: __get__(true, query, limit)
+      if should_define?.(:get) do
+        def get(query \\ %{}, limit \\ 1), do: Q.get(M, query, limit)
+        def get!(query \\ %{}, limit \\ 1), do: Q.get!(M, query, limit)
       end
 
-      if has?.(:update) do
-        undefs?.(:update, 2..3) && def update(struct, changeset, new \\ nil), do: __update__(:update, changeset, new)
-        undefs?.(:update!, 2..3) && def update!(struct, changeset, new \\ nil), do: __update__(:update!, changeset, new)
+      if should_define?.(:update) do
+        def update(struct, params \\ nil), do: Q.update(M, struct, params)
+        def update!(struct, params \\ nil), do: Q.update!(M, struct, params)
       end
 
-      if has?.(:insert) do
-        undef?.(:insert, 1) && def insert(changeset), do: __insert__(:insert, changeset)
-        undef?.(:insert, 1) && def insert!(changeset), do: __insert__(:insert!, changeset)
+      if should_define?.(:upsert) do
+        def upsert(struct, params \\ nil), do: Q.upsert(M, struct, params)
+        def upsert!(struct, params \\ nil), do: Q.upsert!(M, struct, params)
       end
 
-      if has?.(:one) or has?.(:get) do
-        def __one__(func, map) when is_map(map), do: __one__(func, Enum.into(map, []))
-        def __one__(func, id) when is_binary(id), do: __one__(func, [id: id])
-        def __one__(func, kw), do: find(:one, kw, func, [from(u in M, where: ^kw, limit: 1)])
+      if should_define?.(:insert) do
+        def insert(params \\ %{}), do: Q.insert(M, params)
+        def insert!(params \\ %{}), do: Q.insert(M, params)
       end
 
-      if has?.(:all) or has?.(:get) do
-        def __all__(func, map, lim) when is_map(map), do: __all__(func, Enum.into(map, []), lim)
-        def __all__(func, id, lim) when is_binary(id), do: __all__(func, [id: id], lim)
-        def __all__(func, kw, nil), do: find({:all, nil}, kw, func, [from(u in M, where: ^kw)])
-        def __all__(func, kw, lim), do: find({:all, lim}, kw, func, [from(u in M, where: ^kw, limit: ^lim)])
+      if should_define?.(:delete) do
+        def delete(struct), do: Q.delete(M, struct)
+        def delete!(struct), do: Q.delete!(M, struct)
       end
 
-      if has?.(:get) do
-        def __get__(false, query, 1), do: __one__(:one, query)
-        def __get__(true, query, 1), do: __one__(:one!, query)
-        def __get__(false, query, limit), do: __all__(:all, query, limit)
-        def __get__(true, query, limit), do: __all__(:all!, query, limit)
+      if should_define?.(:changeset) do
+        def changeset(struct, params), do: Q.changeset(M, struct, params)
+        def changeset!(struct, params), do: Q.changeset(M, struct, params)
       end
-
-      if has?.(:insert) do
-        def __insert__(func, %{__struct__: Ecto.Changeset} = changeset) do
-          RequestCache.clear()
-          apply(R, func, [changeset])
-        end
-
-        def __insert__(func, %{__struct__: M} = struct) do
-          __insert__(func, Map.from_struct(struct))
-        end
-
-        def __insert__(func, map) when is_map(map) do
-          __insert__(func, Kernel.struct(M) |> changeset(map))
-        end
-
-        def __insert__(func, keywords) do
-          __insert__(func, Enum.into(keywords, %{}))
-        end
-      end
-
-      if has?.(:update) do
-        def __update__(func, query, new \\ nil)
-
-        def __update__(func, %{__struct__: Ecto.Changeset} = changeset, _new) do
-          RequestCache.clear()
-          apply(R, func, [changeset])
-        end
-
-        def __update__(func, %{__struct__: M} = struct, new) do
-          [struct, map] = cond do
-            is_nil(new)           -> [__one__(true, struct.id), Map.from_struct(struct)]
-            is_struct(new)        -> [struct, Map.from_struct(new)]
-            is_pure_map(new)      -> [struct, new]
-            Keyword.keyword?(new) -> [struct, Enum.into(new, %{})]
-          end
-
-          __update__(func, changeset(struct, map))
-        end
-
-        def __update__(func, query, new) do
-          __update__(func, changeset(%{}, query), new)
-        end
-      end
-
-
-      if has?.(:changeset) and undef?.(:changeset, 2) do
-        def changeset(struct, params \\ nil)
-        def changeset(%{__struct__: __MODULE__} = struct, params) do
-          struct
-          |> Ecto.Changeset.cast(params, __editable__())
-          |> Ecto.Changeset.validate_required(__required__())
-        end
-
-        def changeset(query, params) do
-          changeset(one(query), params)
-        end
-
-        over.(:changeset, [2])
-      end
-
-      # checks the cache for the value. if it doesn't exist, then call the repo
-      defp find(ident, query, func, args) do
-        RequestCache.find(M, query, ident, fn _ -> apply(R, func, args) end)
-      end
-
-      defp is_pure_map(value), do: is_map(value) and not(Map.has_key?(value, :__struct__))
-      defp is_struct(value), do: is_map(value) and Map.has_key?(value, :__struct__)
     end
   end
 end
