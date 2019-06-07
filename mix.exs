@@ -4,7 +4,7 @@ defmodule Vecto.MixProject do
   def project do
     [
       app: :vecto,
-      version: "0.1.1",
+      version: "0.1.3",
       elixir: "~> 1.8",
       deps: deps(),
       start_permanent: Mix.env() == :prod,
