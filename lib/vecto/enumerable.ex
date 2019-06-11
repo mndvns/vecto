@@ -4,15 +4,18 @@ defmodule Vecto.Enumerable do
   """
 
   defmacro __using__(_opts) do
-    quote bind_quoted: [module: __MODULE__] do
-      defimpl Enumerable do
-        defdelegate count(enum), to: module
-        defdelegate slice(enum), to: module
-        defdelegate map(enum, fun), to: module
-        defdelegate member?(enum, kv), to: module
-        defdelegate reduce(enum, acc, fun), to: module
+    import Vecto.Utils
+    if !implemented?(Enumerable) do
+      quote do
+        defimpl Enumerable do
+          defdelegate count(enum), to: Vecto.Enumerable
+          defdelegate slice(enum), to: Vecto.Enumerable
+          defdelegate map(enum, fun), to: Vecto.Enumerable
+          defdelegate member?(enum, kv), to: Vecto.Enumerable
+          defdelegate reduce(enum, acc, fun), to: Vecto.Enumerable
+        end
       end
-    end
+    end || nil
   end
 
   def count(map), do: {:ok, Map.from_struct(map) |> map_size()}

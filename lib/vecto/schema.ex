@@ -6,23 +6,27 @@ defmodule Vecto.Schema do
 
   @keys [:default, :virtual, :editable, :required, :displayed, :primary_key]
 
-  defmacro __using__(_opts) do
-    quote location: :keep do
-      Module.register_attribute(__MODULE__, :ecto_primary_keys, accumulate: true, persist: true)
-      Module.register_attribute(__MODULE__, :ecto_fields, accumulate: true, persist: true)
-      Module.register_attribute(__MODULE__, :ecto_field_sources, accumulate: true, persist: true)
-      Module.register_attribute(__MODULE__, :ecto_assocs, accumulate: true, persist: true)
-      Module.register_attribute(__MODULE__, :ecto_embeds, accumulate: true, persist: true)
-      Module.register_attribute(__MODULE__, :ecto_raw, accumulate: true, persist: true)
-      Module.register_attribute(__MODULE__, :ecto_autogenerate, accumulate: true, persist: true)
-      Module.register_attribute(__MODULE__, :ecto_autoupdate, accumulate: true, persist: true)
+  defmacro __using__(opts \\ []) do
+    Module.put_attribute(__CALLER__.module, :strict, Keyword.get(opts, :strict, true))
 
+    quote location: :keep do
+      # ecto attributes
+      Module.register_attribute(__MODULE__, :ecto_primary_keys, accumulate: true)
+      Module.register_attribute(__MODULE__, :ecto_fields, accumulate: true)
+      Module.register_attribute(__MODULE__, :ecto_field_sources, accumulate: true)
+      Module.register_attribute(__MODULE__, :ecto_assocs, accumulate: true)
+      Module.register_attribute(__MODULE__, :ecto_embeds, accumulate: true)
+      Module.register_attribute(__MODULE__, :ecto_raw, accumulate: true)
+      Module.register_attribute(__MODULE__, :ecto_autogenerate, accumulate: true)
+      Module.register_attribute(__MODULE__, :ecto_autoupdate, accumulate: true)
       @primary_key {:id, :binary_id, autogenerate: true}
       @timestamps_opts inserted_at: :created_at
       @foreign_key_type :binary_id
       @schema_prefix nil
       @field_source_mapper & &1
       @ecto_autogenerate_id nil
+
+      # vecto attributes
       @displayed_keys [:id]
 
       import Ecto.Schema, only: [embedded_schema: 1]
@@ -33,6 +37,8 @@ defmodule Vecto.Schema do
   end
 
   defmacro schema(name, do: {:__block__, _env, blocks}) do
+    strict = Module.get_attribute(__CALLER__.module, :strict)
+
     blocks = [{:field, [], [:href, :string, [virtual: true]]} | blocks]
 
     conf = Enum.reduce(@keys, %{blocks: []}, &Map.put(&2, &1, []))
@@ -43,7 +49,7 @@ defmodule Vecto.Schema do
           {type, _} = List.pop_at(args, 0, :string)
           {opts, _} = List.pop_at(args, 1, [])
 
-          {opts, acc} = pop_opt(:editable, true, name, opts, acc)
+          {opts, acc} = pop_opt(:editable, !strict, name, opts, acc)
           {opts, acc} = pop_opt(:required, false, name, opts, acc)
           {opts, acc} = pop_opt(:displayed, true, name, opts, acc)
 
@@ -82,7 +88,7 @@ defmodule Vecto.Schema do
       for key <- @keys do
         list1 = get_attr.(:"#{key}_keys") || []
         list2 = get_attr.(:"model_#{key}") || []
-        merged = Enum.uniq(list1 ++ list2) |> Enum.sort()
+        merged = Enum.uniq(list1 ++ list2)
         put_attr.(:"#{key}_keys", merged)
         quote(do: def(unquote(:"__#{key}__")(), do: unquote(merged)))
       end,
@@ -101,11 +107,15 @@ defmodule Vecto.Schema do
           default: get_attr.(:model_default)[name]
         ] ++ flags
 
-        quote(do: def(__field__(unquote(name)), do: unquote(attrs)))
+        struct = Vecto.Schema.Field
+        |> Kernel.struct(attrs)
+        |> Macro.escape()
+
+        quote(do: def(__field__(unquote(name)), do: unquote(struct)))
       end,
 
       # return non-defined fields with `nil`
-      quote(do: def(__field__(_name), do: nil))
+      quote(do: def(__field__(_name), do: nil)),
     ]
   end
 

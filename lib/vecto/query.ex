@@ -1,29 +1,70 @@
 defmodule Vecto.Query do
   require Ecto.Query
+  import Vecto.Query.Utils
 
-  def one(module, where \\ %{}), do: find(:one, false, module, where, 1)
-  def one!(module, where \\ %{}), do: find(:one, true, module, where, 1)
+  @default_definitions [:all, :one, :get, :update, :upsert, :insert, :delete, :changeset]
 
-  def all(module, where \\ %{}, limit \\ nil), do: find(:all, false, module, where, limit)
-  def all!(module, where \\ %{}, limit \\ nil), do: find(:all, true, module, where, limit)
+  defmacro __using__(opts \\ []) do
+    define_only = Keyword.get(opts, :define_only, @default_definitions)
+    define_except = Keyword.get(opts, :define_except, [])
+    definitions = define_only -- define_except
+    quote do
+      unless Module.defines?(__MODULE__, {:preloads, 0}) do
+        def preloads, do: []
+        defoverridable preloads: 0
+      end
 
-  def get(module, where \\ %{}, limit \\ 1), do: find(:get, false, module, where, limit)
-  def get!(module, where \\ %{}, limit \\ 1), do: find(:get, true, module, where, limit)
+      import Vecto.Query.Helper, only: [define: 1]
 
-  def update(module, where \\ %{}, params \\ nil), do: change(:update, module, where, params)
-  def update!(module, where \\ %{}, params \\ nil), do: change(:update!, module, where, params)
+      define? = &Enum.member?(unquote(definitions), &1)
 
-  def upsert(module, where \\ %{}, params \\ nil), do: change_or_create(false, module, where, params)
-  def upsert!(module, where \\ %{}, params \\ nil), do: change_or_create(true, module, where, params)
+      define?.(:all) && define(all(query \\ %{}, limit \\ nil))
 
-  def insert(module, params \\ %{}), do: create(:insert, module, params)
-  def insert!(module, params \\ %{}), do: create(:insert!, module, params)
+      define?.(:one) && define(one(query \\ %{}))
+      define?.(:one) && define(one!(query \\ %{}))
 
-  def delete(module, struct), do: remove(:delete, module, struct)
-  def delete!(module, struct), do: remove(:delete!, module, struct)
+      define?.(:get) && define(get(query \\ %{}, limit \\ 1))
+      define?.(:get) && define(get!(query \\ %{}, limit \\ 1))
+
+      define?.(:update) && define(update(struct, params \\ nil))
+      define?.(:update) && define(update!(struct, params \\ nil))
+
+      define?.(:upsert) && define(upsert(struct, params \\ %{}))
+      define?.(:upsert) && define(upsert!(struct, params \\ %{}))
+
+      define?.(:insert) && define(insert(params \\ %{}))
+      define?.(:insert) && define(insert!(params \\ %{}))
+
+      define?.(:delete) && define(delete(params))
+      define?.(:delete) && define(delete!(params))
+
+      define?.(:changeset) && define(changeset(struct, params))
+    end
+  end
+
+  def all(module, where \\ %{}, limit \\ nil), do: do_get(:all, false, module, where, limit)
+
+  def one(module, where \\ %{}), do: do_get(:one, false, module, where, 1)
+  def one!(module, where \\ %{}), do: do_get(:one, true, module, where, 1)
+
+  def get(module, where \\ %{}, limit \\ 1), do: do_get(:get, false, module, where, limit)
+  def get!(module, where \\ %{}, limit \\ 1), do: do_get(:get, true, module, where, limit)
+
+  def update(module, where \\ %{}, params \\ nil), do: do_update(:update, module, where, params)
+  def update!(module, where \\ %{}, params \\ nil), do: do_update(:update!, module, where, params)
+
+  def upsert(module, where \\ %{}, params \\ nil), do: do_upsert(false, module, where, params)
+  def upsert!(module, where \\ %{}, params \\ nil), do: do_upsert(true, module, where, params)
+
+  def insert(module, params \\ %{}), do: do_insert(:insert, module, params)
+  def insert!(module, params \\ %{}), do: do_insert(:insert!, module, params)
+
+  def delete(module, struct), do: do_delete(false, module, struct)
+  def delete!(module, struct), do: do_delete(true, module, struct)
 
   def changeset(module, %{__struct__: module} = struct, params) do
     params = params |> sanitize(module) |> Enum.into(%{})
+    IO.inspect UPSERT: {struct, params}
     struct
     |> Ecto.Changeset.cast(params, module.__editable__())
     |> Ecto.Changeset.validate_required(module.__required__())
@@ -32,7 +73,7 @@ defmodule Vecto.Query do
     changeset(module, one!(module, where), params)
   end
 
-  defp change(func, module, %Ecto.Changeset{} = changeset, _new) do
+  defp do_update(func, module, %Ecto.Changeset{} = changeset, new) do
     result = apply(Vecto.Repo, func, [changeset])
     case result do
       %{__struct__: ^module} -> store_update_struct(result)
@@ -41,17 +82,17 @@ defmodule Vecto.Query do
     end
     result
   end
-  defp change(func, module, %{__struct__: module, id: id} = struct, nil) do
-    change(func, module, one!(module, id), Map.from_struct(struct))
+  defp do_update(func, module, %{__struct__: module, id: id} = struct, nil) do
+    do_update(func, module, one!(module, id), Map.from_struct(struct))
   end
-  defp change(func, module, %{__struct__: module} = struct, new) do
-    change(func, module, changeset(module, struct, new), new)
+  defp do_update(func, module, %{__struct__: module} = struct, new) do
+    do_update(func, module, changeset(module, struct, new), new)
   end
-  defp change(func, module, where, new) do
-    change(func, module, one!(module, where), new)
+  defp do_update(func, module, where, new) do
+    do_update(func, module, one!(module, where), new)
   end
 
-  defp change_or_create(bang, module, where, params) do
+  defp do_upsert(bang?, module, where, params) do
     where = sanitize(where, module)
     |> Enum.into(%{})
     |> case do
@@ -61,36 +102,38 @@ defmodule Vecto.Query do
 
     case one(module, where) do
       %{__struct__: ^module} = struct->
-        func = if bang, do: :update!, else: :update
-        change(func, module, struct, params)
+        func = if bang?, do: :update!, else: :update
+        do_update(func, module, struct, params)
       _other ->
-        func = if bang, do: :insert!, else: :insert
+        func = if bang?, do: :insert!, else: :insert
         merged = Keyword.merge(sanitize(where, module), sanitize(params, module))
-        create(func, module, merged)
+        do_insert(func, module, merged)
     end
   end
 
-  defp create(func, module, %Ecto.Changeset{data: %{__struct__: module}} = changeset) do
+  defp do_insert(func, module, %Ecto.Changeset{data: %{__struct__: module}} = changeset) do
     result = apply(Vecto.Repo, func, [changeset])
     case result do
-      %{__struct__: ^module} -> store_put_struct(result)
+      %{__struct__: _} = result -> store_put_struct(result)
       {:ok, result} -> store_put_struct(result)
       {:error, _} -> nil
     end
     result
   end
-  defp create(func, module, new) do
-    create(func, module, changeset(module, Kernel.struct(module), new))
+  defp do_insert(func, module, new) do
+    do_insert(func, module, changeset(module, Kernel.struct(module, []), new))
   end
 
-  defp find(:get, bang, module, where, nil), do: find(:one, bang, module, where, 1)
-  defp find(:get, bang, module, where, limit), do: find(:all, bang, module, where, limit)
-  defp find(func, bang, module, where, limit) do
+  defp do_get(:get, bang?, module, where, 1), do: do_get(:one, bang?, module, where, 1)
+  defp do_get(:get, bang?, module, where, nil), do: do_get(:one, bang?, module, where, 1)
+  defp do_get(:get, bang?, module, where, limit), do: do_get(:all, bang?, module, where, limit)
+  defp do_get(func, bang?, module, where, limit) do
     where = sanitize(where, module)
     stored_map = Enum.into(where, %{}) # for easy deletion and updating later
-    func = if bang, do: :"#{func}!", else: func
+    func = if bang?, do: :"#{func}!", else: func
     RequestCache.get_or_store({module, func, stored_map, limit}, fn ->
-      query = Ecto.Query.from(u in module, where: ^where)
+      query = Ecto.Query.from(u in module, select: u, where: ^where, preload: ^module.preloads())
+      query = if module.__schema__(:type, :deleted_at), do: Ecto.Query.where(query, [u], is_nil(u.deleted_at)), else: query
       query = if is_nil(limit), do: query, else: Ecto.Query.limit(query, ^limit)
       result = apply(Vecto.Repo, func, [query])
       # store each record if we returned a list
@@ -99,20 +142,38 @@ defmodule Vecto.Query do
     end)
   end
 
-  defp remove(func, module, %{__struct__: module} = struct) do
-    result = apply(Vecto.Repo, func, [struct])
-    case result do
-      {:ok, _} -> store_delete_struct(struct)
-      {:error, _} -> nil
+  defp do_delete(bang?, module, %{__struct__: module} = struct) do
+    deleted_at? = module.__schema__(:type, :deleted_at)
+    if deleted_at? do
+      changeset(module, struct, %{})
+      |> Ecto.Changeset.put_change(:deleted_at, NaiveDateTime.utc_now())
+      |> Vecto.Repo.update!()
+    else
+      Vecto.Repo.delete!(struct)
     end
-    result
+  catch
+    exception when bang? -> raise exception
+    _exception when not(bang?) -> {:error, :cannot_delete}
+  else
+    _struct ->
+      store_delete_struct(struct)
+      if bang?, do: struct, else: {:ok, struct}
   end
-  defp remove(func, module, where) do
-    remove(func, module, one!(module, where))
+  defp do_delete(true, module, where) do
+    do_delete(true, module, one!(module, where))
+  end
+  defp do_delete(false, module, where) do
+    case one(module, where) do
+      nil -> {:error, :cannot_find}
+      struct -> do_delete(false, module, struct)
+    end
   end
 
   defp store_put_struct(%{__struct__: module, id: id} = struct) do
     RequestCache.put({module, :one, %{id: id}, 1}, struct)
+  end
+  defp store_put_struct(%{__struct__: _module} = struct) do
+    struct
   end
 
   defp store_update_struct(%{__struct__: _, id: id} = struct) do
@@ -126,72 +187,5 @@ defmodule Vecto.Query do
     RequestCache.all()
     |> Enum.filter(fn {_key, value} -> is_map(value) and Map.get(value, :id) == id end)
     |> Enum.each(fn {key, _} -> RequestCache.delete(key) end)
-  end
-
-  defp sanitize(id, module) when is_binary(id) do
-    [id: id] |> sanitize(module)
-  end
-  defp sanitize(%{__struct__: module} = struct, module) do
-    struct |> Map.from_struct() |> sanitize(module)
-  end
-  defp sanitize(enum, module) do
-    reject_keys = [:__meta__ | module.__virtual__()]
-    Enum.reject(enum, fn {key, value} -> is_nil(value) or key in reject_keys end)
-  end
-
-  @default_definitions [:one, :all, :get, :update, :upsert, :insert, :delete, :changeset]
-
-  defmacro __using__(opts) do
-    define_except = Keyword.get(opts, :define_except, [])
-    define_only = Keyword.get(opts, :define_only, @default_definitions)
-    definitions = define_only -- define_except
-
-    quote location: :keep do
-      alias __MODULE__, as: M
-      alias Vecto.Repo, as: R
-      alias Vecto.Query, as: Q
-
-      should_define? = &Enum.member?(unquote(definitions), &1)
-
-      if should_define?.(:one) do
-        def one(query \\ %{}), do: Q.one(M, query)
-        def one!(query \\ %{}), do: Q.one!(M, query)
-      end
-
-      if should_define?.(:all) do
-        def all(query \\ %{}, limit \\ nil), do: Q.all(M, query, limit)
-        def all!(query \\ %{}, limit \\ nil), do: Q.all!(M, query, limit)
-      end
-
-      if should_define?.(:get) do
-        def get(query \\ %{}, limit \\ 1), do: Q.get(M, query, limit)
-        def get!(query \\ %{}, limit \\ 1), do: Q.get!(M, query, limit)
-      end
-
-      if should_define?.(:update) do
-        def update(struct, params \\ nil), do: Q.update(M, struct, params)
-        def update!(struct, params \\ nil), do: Q.update!(M, struct, params)
-      end
-
-      if should_define?.(:upsert) do
-        def upsert(struct, params \\ nil), do: Q.upsert(M, struct, params)
-        def upsert!(struct, params \\ nil), do: Q.upsert!(M, struct, params)
-      end
-
-      if should_define?.(:insert) do
-        def insert(params \\ %{}), do: Q.insert(M, params)
-        def insert!(params \\ %{}), do: Q.insert(M, params)
-      end
-
-      if should_define?.(:delete) do
-        def delete(struct), do: Q.delete(M, struct)
-        def delete!(struct), do: Q.delete!(M, struct)
-      end
-
-      if should_define?.(:changeset) do
-        def changeset(struct, params), do: Q.changeset(M, struct, params)
-        def changeset!(struct, params), do: Q.changeset(M, struct, params)
-      end
-    end
   end
 end
