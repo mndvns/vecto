@@ -64,7 +64,6 @@ defmodule Vecto.Query do
 
   def changeset(module, %{__struct__: module} = struct, params) do
     params = params |> sanitize(module) |> Enum.into(%{})
-    IO.inspect UPSERT: {struct, params}
     struct
     |> Ecto.Changeset.cast(params, module.__editable__())
     |> Ecto.Changeset.validate_required(module.__required__())
