@@ -23,7 +23,7 @@ defmodule Vecto.Query.Utils do
     |> Enum.reverse()
   end
 
-  defp sanitize({key, nil}, _module, acc) do
+  defp sanitize({_key, nil}, _module, acc) do
     acc
   end
   defp sanitize({key, value}, module, acc) when is_atom(key) do

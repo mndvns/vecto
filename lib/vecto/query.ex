@@ -72,7 +72,7 @@ defmodule Vecto.Query do
     changeset(module, one!(module, where), params)
   end
 
-  defp do_update(func, module, %Ecto.Changeset{} = changeset, new) do
+  defp do_update(func, module, %Ecto.Changeset{} = changeset, _new) do
     result = apply(Vecto.Repo, func, [changeset])
     case result do
       %{__struct__: ^module} -> store_update_struct(result)
